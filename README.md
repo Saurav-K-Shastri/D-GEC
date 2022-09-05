@@ -8,4 +8,4 @@ To make sure that the versions of the packages match those we tested the code wi
 conda env create -f environment.yml
 ```
 
-We will upload the demo on line sampling by Sept 6th.
+We will upload the demo on line sampling by Sep 6, 2022.
