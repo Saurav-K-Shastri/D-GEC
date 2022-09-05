@@ -482,6 +482,46 @@ def calc_batch_MC_divergence_complex_with_warm_strt(denoiser, wavelet_mat, varia
 
 
 
+def calc_batch_MC_divergence_complex_with_warm_strt_2(denoiser, wavelet_mat, variances, x_init_with_MC, level,subband_sizes,p1m1_mask,changeFactor):
+
+    """This is for processing multiple subband batches only
+    """
+    device = wavelet_mat.device
+
+    
+    next_x_warm_MC = torch.zeros_like(x_init_with_MC)
+    
+    
+    alpha = torch.zeros(3*level + 1, device = device)
+
+    
+    eta1 = wutils.get_mean_in_each_subband(wavelet_mat,p1m1_mask,subband_sizes)
+        
+    eta2 = torch.sqrt(variances)
+    
+
+    eta_subband = changeFactor*torch.min(eta1,eta2)
+    
+    eps = torch.tensor(2.22e-16, device = device)
+    
+    eta_subband = eta_subband + eps 
+    
+    batch_wave_mat_jittered, noise_mat = wutils.get_my_jittred_batch_subband(wavelet_mat,level,eta_subband,p1m1_mask)
+
+    
+    denoised_jittered_with_denoised = denoiser(batch_wave_mat_jittered, variances, x_init_with_MC)
+
+    next_x_warm_with_MC = (denoised_jittered_with_denoised).clone()
+    denoised = denoised_jittered_with_denoised[0,:,:,:].unsqueeze(0)
+    denoised_jittered = denoised_jittered_with_denoised[1:,:,:,:]
+
+    alpha = (1. / subband_sizes)*transforms_new.real_part_of_aHb(noise_mat.permute(0,2,3,1),(((denoised_jittered - denoised).permute(1,2,3,0)/eta_subband).permute(3,0,1,2)).permute(0,2,3,1))
+    
+    return denoised, alpha, next_x_warm_with_MC
+
+
+
+
 
 
 def calc_batch_MC_divergence_complex(denoiser, wavelet_mat, variances, level,subband_sizes,p1m1_mask):
@@ -546,6 +586,51 @@ def calc_batch_MC_divergence_true_complex(denoiser, wavelet_mat, variances, leve
     alpha = (1. / subband_sizes)*transforms_new.real_part_of_aHb(noise_mat.permute(0,2,3,1),((denoised_jittered - denoised)/eta).permute(0,2,3,1))
     
     return denoised, alpha
+
+
+
+def calc_batch_MC_divergence_true_complex_2(denoiser, wavelet_mat, variances, level,subband_sizes,p1m1_mask, ifm, scale_percentile,changeFactor):
+
+    """This is for processing multiple subband batches only
+    """
+    # Find the scaling factor
+    
+    
+    noisy_image = wutils.wave_inverse_mat(wavelet_mat, ifm, level)
+    sorted_image_vec = transforms_new.complex_abs(noisy_image.squeeze(0).permute(1,2,0)).reshape((-1,)).sort()
+    scale = sorted_image_vec.values[int(len(sorted_image_vec.values) * scale_percentile/100)].item()
+    
+    device = wavelet_mat.device
+           
+    alpha = torch.zeros(3*level + 1, device = device)
+
+#     eta1 = wutils.get_max_in_each_subband(wavelet_mat,p1m1_mask)/10
+    eta1 = wutils.get_mean_in_each_subband(wavelet_mat,p1m1_mask,subband_sizes)
+        
+    eta2 = torch.sqrt(variances)
+    
+#     print('LMSE Stage delta selected pos --> eta2 (var), neg --> eta 1 (abs (r))')
+#     print(torch.sign(eta1-eta2))
+    
+    eta_subband = changeFactor*torch.min(eta1,eta2)
+#     eta_subband = changeFactor*torch.min(eta2)
+        
+    eps = torch.tensor(2.22e-16, device = device)
+    
+    eta_subband = eta_subband + eps 
+    
+    batch_wave_mat_jittered, noise_mat = wutils.get_my_jittred_batch_subband(wavelet_mat,level,eta_subband,p1m1_mask)
+    
+    denoised_jittered_with_denoised = denoiser(batch_wave_mat_jittered, variances, scale)
+
+    denoised = denoised_jittered_with_denoised[0,:,:,:].unsqueeze(0)
+    denoised_jittered = denoised_jittered_with_denoised[1:,:,:,:]
+    
+    alpha = (1. / subband_sizes)*transforms_new.real_part_of_aHb(noise_mat.permute(0,2,3,1),(((denoised_jittered - denoised).permute(1,2,3,0)/eta_subband).permute(3,0,1,2)).permute(0,2,3,1))
+    
+    return denoised, alpha
+
+
 
 
 # Incomplete- probably not necessary 
@@ -861,7 +946,7 @@ class LMSE_batch_2_CG_GEC_with_div_and_warm_strt:
 
 class LMSE_batch_CG_GEC_with_div_and_warm_strt_multi_coil:
     """Wrapper of LMSE for using with GEC which used CG. This code uses warm start. This is for multicoil"""
-    def __init__(self, y, idx1_complement, idx2_complement,sigma_w, xfm,ifm, p1m1_mask, subband_sizes, sense_map, level = 4,LMSE_inner_iter_lim = 100, beta_tune_LMSE = torch.tensor(1), eps_lim = torch.tensor(1e-4)):
+    def __init__(self, y, idx1_complement, idx2_complement,sigma_w, xfm,ifm, p1m1_mask, subband_sizes, sense_map, level = 4,LMSE_inner_iter_lim = 100, beta_tune_LMSE = torch.tensor(1), eps_lim = torch.tensor(1e-4), changeFactor = 0.1):
 
         self.y = y
         self.idx1_complement = idx1_complement
@@ -875,13 +960,13 @@ class LMSE_batch_CG_GEC_with_div_and_warm_strt_multi_coil:
         self.xfm = xfm
         self.ifm = ifm
         self.sense_map = sense_map
-        
+        self.changeFactor = changeFactor
         self.sigma_w = sigma_w/torch.sqrt(self.beta_tune_LMSE)
         
     def __call__(self, wavelet_mat, variances, x_init_with_MC, calc_divergence=True):
 
-     
-        denoised, alpha, next_x_warm_with_MC = calc_batch_MC_divergence_complex_with_warm_strt(self._denoise, wavelet_mat, variances, x_init_with_MC, self.level,self.subband_sizes,self.p1m1_mask)
+#         denoised, alpha, next_x_warm_with_MC = calc_batch_MC_divergence_complex_with_warm_strt(self._denoise, wavelet_mat, variances, x_init_with_MC, self.level,self.subband_sizes,self.p1m1_mask)
+        denoised, alpha, next_x_warm_with_MC = calc_batch_MC_divergence_complex_with_warm_strt_2(self._denoise, wavelet_mat, variances, x_init_with_MC, self.level,self.subband_sizes,self.p1m1_mask, self.changeFactor)
         
         return denoised, alpha, next_x_warm_with_MC
 
@@ -1458,7 +1543,7 @@ class DnCNN_cpc_VDAMP_true_complex_batch:
     """
     def __init__(self, modeldir, std_ranges, xfm,ifm, p1m1_mask, subband_sizes,  channels=2, wavetype='haar',
                 num_layers=20, std_channels=13, beta_tune = torch.tensor(1), device=torch.device('cpu'),
-                std_pool_func=torch.mean, verbose=False, level = 4, scale_percentile = 98):
+                std_pool_func=torch.mean, verbose=False, level = 4, scale_percentile = 98, changeFactor = 0.1):
         """Initialize ColoredDnCNN_VDAMP
 
         Args:
@@ -1493,12 +1578,14 @@ class DnCNN_cpc_VDAMP_true_complex_batch:
         self.xfm = xfm
         self.ifm = ifm
         self.scale_percentile = scale_percentile
+        self.changeFactor = changeFactor
         
     def __call__(self, wavelet_mat, variances, calc_divergence=True):
 
         variances *= self.beta_tune
         
-        denoised, alpha = calc_batch_MC_divergence_true_complex(self._denoise, wavelet_mat, variances, self.level,self.subband_sizes,self.p1m1_mask, self.ifm, self.scale_percentile)
+#         denoised, alpha = calc_batch_MC_divergence_true_complex(self._denoise, wavelet_mat, variances, self.level,self.subband_sizes,self.p1m1_mask, self.ifm, self.scale_percentile)
+        denoised, alpha = calc_batch_MC_divergence_true_complex_2(self._denoise, wavelet_mat, variances, self.level,self.subband_sizes,self.p1m1_mask, self.ifm, self.scale_percentile,self.changeFactor)
         
         return denoised, alpha
     

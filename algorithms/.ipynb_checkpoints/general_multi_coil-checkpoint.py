@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 import torch
-
+import random
 
 from utils import general as gutil
 from utils import transform as tutil
@@ -34,6 +34,12 @@ import sigpy.mri as mr
 import utils.wave_torch_transforms as wutils
 
 from numpy import linalg as LA
+
+from algorithms import D_GEC_multi_coil
+from algorithms import PnP_PDS_multi_coil
+
+from scipy.io import savemat
+from scipy.io import loadmat
 
 
 def gen_pdf(shape, sampling_rate, p=8, dist_type='l2', radius=0., ret_tensor=False):
@@ -436,3 +442,254 @@ def get_multi_coil_noisy_measurement_and_sens_maps(dev_data, image_number, snr, 
 
     
     return y, GT_target_complex, sens_maps_new, mask, prob_map, wvar, M, N, metric_mask, GT_target_abs
+
+
+
+
+
+def run_fast_DGEC_and_PnP(dataset,R,sampling_pattern,image_number,model_dir,data_dir,device):
+    
+    print("Chosen Options ")
+    print(" ")
+    print("Dataset      : ", dataset)
+    print("Acceleration : ", R)
+    print("Sampling     : ", sampling_pattern)
+    print("Image Number : ", image_number)
+    print(" ")
+    
+    random.seed(10)
+    
+    if dataset == 'knee':
+        
+        modelnames_cpc = ['checkpoint_last_DnCNN_cpc_0_10_knee.pt','checkpoint_last_DnCNN_cpc_10_20_knee.pt', 'checkpoint_last_DnCNN_cpc_20_50_knee.pt', 'checkpoint_last_DnCNN_cpc_50_120_knee.pt', 'checkpoint_last_DnCNN_cpc_120_500_knee.pt']    
+        modeldir_cpc = model_dir
+        model_PnP_PDS = model_dir+'checkpoint_last_DnCNN_0_50_knee.pt'
+        
+        sens_var = torch.tensor(1.48375e-11,device = device) # noise variance introduced by imperfect sens-map estimation by ESPIRiT # computed this number by taking average over training data
+        
+        
+        if R == 4:
+            
+            if sampling_pattern == 'point':
+                mdic = loadmat(data_dir+"R_4_VD_point_SNR_40_data_knee.mat")
+                gamma_tune_pnp = 14 #
+                stopping_iter_pnp = 150 #
+                GAMMA_1_init_DGEC = torch.tensor([9.3213e+08,1.7388e+09, 2.2381e+08, 1.1679e+09, 2.3922e+09, 5.0267e+08, 3.0033e+09, 5.3525e+09, 2.1406e+09, 8.2562e+09, 1.3404e+10, 8.8008e+09, 2.5476e+10], device=device).reshape(1,13) # 
+                num_of_D_GEC_iterations = 20 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+                
+            else:
+                mdic = loadmat(data_dir+"R_4_VD_line_SNR_40_data_knee.mat")
+                gamma_tune_pnp = 2#
+                stopping_iter_pnp = 65 #
+                GAMMA_1_init_DGEC = torch.tensor([2.7596e+08, 2.7130e+09, 8.2882e+07, 6.9745e+08, 3.9486e+09, 2.2255e+08, 2.0695e+09, 7.7411e+09, 1.2643e+09, 7.2054e+09, 1.7055e+10, 6.4233e+09,2.1743e+10], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 20 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+
+        else:
+            
+            if sampling_pattern == 'point':
+                mdic = loadmat(data_dir+"R_8_VD_point_SNR_40_data_knee.mat")
+                gamma_tune_pnp = 28 #
+                stopping_iter_pnp = 150 #
+                GAMMA_1_init_DGEC = torch.tensor([4.0894e+08, 9.9545e+08, 1.1198e+08, 7.0133e+08, 1.6004e+09, 3.1016e+08, 2.1611e+09, 3.9461e+09, 1.4964e+09, 6.3553e+09, 1.0426e+10, 6.6397e+09, 2.0249e+10], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 20 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+                
+            else:
+                mdic = loadmat(data_dir+"R_8_VD_line_SNR_40_data_knee.mat")
+                gamma_tune_pnp = 2.6 #
+                stopping_iter_pnp = 40 #
+                GAMMA_1_init_DGEC = torch.tensor([1.1144e+08, 1.1772e+09, 3.4890e+07, 3.3948e+08, 2.0209e+09, 1.4197e+08, 1.5056e+09, 5.2022e+09, 8.7777e+08, 5.4190e+09, 1.2479e+10, 4.9209e+09, 1.7975e+10], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 25 #
+                theta_damp = 0.1 #
+                zeta_damp = 0.1 #
+                
+    else:
+        
+        modelnames_cpc = ['checkpoint_last_DnCNN_cpc_0_10_brain.pt','checkpoint_last_DnCNN_cpc_10_20_brain.pt', 'checkpoint_last_DnCNN_cpc_20_50_brain.pt', 'checkpoint_last_DnCNN_cpc_50_120_brain.pt', 'checkpoint_last_DnCNN_cpc_120_500_brain.pt']    
+        modeldir_cpc = model_dir
+        model_PnP_PDS = model_dir+'checkpoint_last_DnCNN_0_50_brain.pt'
+        
+        sens_var = torch.tensor(2.61477e-11,device = device) # noise variance introduced by imperfect sens-map estimation by ESPIRiT # computed this number by taking average over training data
+
+        
+        if R == 4:
+            
+            if sampling_pattern == 'point':
+                mdic = loadmat(data_dir+"R_4_VD_point_SNR_40_data_brain.mat")
+                gamma_tune_pnp = 8 #
+                stopping_iter_pnp = 150 #
+                GAMMA_1_init_DGEC = torch.tensor([2.8574e+08, 1.5385e+08, 7.9434e+07, 1.2128e+08, 2.1945e+08, 1.3939e+08, 3.4929e+08, 7.8193e+08, 4.3533e+08, 1.5188e+09, 3.5007e+09, 1.7217e+09, 6.4551e+09], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 20 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+                
+            else:
+                mdic = loadmat(data_dir+"R_4_VD_line_SNR_40_data_brain.mat")
+                gamma_tune_pnp = 19 #
+                stopping_iter_pnp = 250 #
+                GAMMA_1_init_DGEC = torch.tensor([6.7335e+07, 1.7997e+08, 2.1171e+07, 5.4539e+07, 2.5886e+08, 6.6384e+07, 2.5029e+08, 9.4169e+08, 2.7304e+08, 1.2594e+09, 3.9598e+09, 1.2886e+09, 5.4382e+09], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 40 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+        else:
+            
+            if sampling_pattern == 'point':
+                mdic = loadmat(data_dir+"R_8_VD_point_SNR_40_data_brain.mat")
+                gamma_tune_pnp = 20 #
+                stopping_iter_pnp = 150 #
+                GAMMA_1_init_DGEC = torch.tensor([1.2884e+08, 8.1389e+07, 4.1922e+07, 7.1478e+07, 1.4306e+08, 8.9336e+07, 2.4182e+08, 5.5531e+08, 3.0787e+08, 1.1487e+09, 2.6299e+09, 1.2936e+09, 5.0456e+09], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 20 #
+                theta_damp = 0.3 #
+                zeta_damp = 0.3 #
+                
+            else:
+                mdic = loadmat(data_dir+"R_8_VD_line_SNR_40_data_brain.mat")
+                gamma_tune_pnp = 4 #
+                stopping_iter_pnp = 71 #               
+                GAMMA_1_init_DGEC = torch.tensor([2.2351e+08, 1.8501e+09, 4.841e+08, 3.5677e+09, 4.3345e+09, 9.9892e+08, 3.421e+09, 9.9599e+08, 2.9344e+09, 3.2467e+09, 3.6578e+09, 4.0132e+09, 3.8501e+09], device=device).reshape(1,13) #
+                num_of_D_GEC_iterations = 40 #
+                theta_damp = 0.1 #
+                zeta_damp = 0.1 #
+            
+
+                                                  
+    y_mat = mdic['y_mat']
+    GT_target_complex_mat = mdic['GT_target_complex_mat']
+    sens_maps_mat = mdic['sens_maps_mat']
+    mask_mat = mdic['mask_mat']
+    prob_map_mat = mdic['prob_map_mat']
+    sigma_w_square_mat = mdic['sigma_w_square_mat']
+    M_mat = mdic['M_mat']
+    N_mat = mdic['N_mat']
+    metric_mask_mat = mdic['metric_mask_mat']
+    GT_target_abs_mat = mdic['GT_target_abs_mat']
+
+
+    y_foo = transforms_new.to_tensor(y_mat[image_number]).permute(2,0,1,3)
+    y = (torch.cat((y_foo[:,:,:,0], y_foo[:,:,:,1]), dim = 0).unsqueeze(0)).to(device)
+    GT_target_complex = transforms_new.to_tensor(GT_target_complex_mat[image_number]).permute(2,0,1).unsqueeze(0).to(device)
+    sens_maps_new = transforms_new.to_tensor(sens_maps_mat[image_number]).permute(2,0,1,3).to(device)
+    mask = mask_mat[image_number,:,:]
+    prob_map = prob_map_mat[image_number,:,:]
+    wvar = torch.tensor(sigma_w_square_mat[image_number,0],device=device)
+    M = M_mat[image_number,0]
+    N = N_mat[image_number,0]
+    metric_mask = transforms_new.to_tensor(metric_mask_mat[image_number,:,:]).to(device)
+    GT_target_abs = transforms_new.to_tensor(GT_target_abs_mat[image_number,:,:]).to(device)
+
+    y = y.type('torch.FloatTensor').to(device)
+    GT_target_complex = GT_target_complex.type('torch.FloatTensor').to(device)
+    sens_maps_new = sens_maps_new.type('torch.FloatTensor').to(device)
+    
+    
+    
+                                    
+    ## DGEC
+    print("running D-GEC...")     
+    x_D_GEC_denoiser, x_D_GEC_LMMSE, PSNR_list_GEC = D_GEC_multi_coil.D_GEC_fast(y, sens_maps_new, mask, wvar, sens_var, num_of_D_GEC_iterations, modelnames_cpc, modeldir_cpc ,theta_damp,zeta_damp, GT_target_abs, metric_mask, GAMMA_1_init_DGEC)
+    recovered_image_DGEC_1 = transforms_new.complex_abs(x_D_GEC_denoiser.squeeze(0).permute(1,2,0))
+                   
+    # PnP-PDS
+    print("running PnP-PDS... ")                                      
+    x_PnP_PDS, PSNR_list_PnP_PDS = PnP_PDS_multi_coil.PnP_PDS(y, sens_maps_new, mask, wvar, stopping_iter_pnp, model_PnP_PDS, gamma_tune_pnp, GT_target_abs, metric_mask)
+    recovered_image_PNP = transforms_new.complex_abs(x_PnP_PDS.squeeze(0).permute(1,2,0))
+
+    print('Done!')
+                                                  
+    # Metric
+
+    PSNR_D_GEC_Den = gutil.calc_psnr((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu(), max = (GT_target_abs*metric_mask).max().cpu())
+    PSNR_PnP_PDS = gutil.calc_psnr((recovered_image_PNP*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu(), max = (GT_target_abs*metric_mask).max().cpu())
+
+    rSNR_D_GEC_Den = gutil.calc_rSNR_non_DB_scale((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+    rSNR_PnP_PDS = gutil.calc_rSNR_non_DB_scale((recovered_image_PNP*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+
+    SSIM_D_GEC_Den = gutil.calc_SSIM((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+    SSIM_PnP_PDS = gutil.calc_SSIM((recovered_image_PNP*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+    
+    print(" ")
+    print("Results : ")
+    print(" ")
+    print("Metrics  |   PSNR    |    SSIM   ")
+    print("------------------------------------")
+    print("PnP-PDS  |  ", format(np.round(PSNR_PnP_PDS,2),'.2f'), "  |  ", format(np.round(SSIM_PnP_PDS,4),'.4f'))
+    print("D-GEC    |  ", format(np.round(PSNR_D_GEC_Den,2),'.2f'), "  |  ", format(np.round(SSIM_D_GEC_Den,4),'.4f'))
+    print("------------------------------------")
+    print(" ")
+
+
+    print("Figures : ")
+    print(" ")
+    figure_mosaic = """
+    ABC
+    DEF
+    """
+    GT = metric_mask.cpu()*GT_target_abs.cpu()
+    scale = torch.max(GT)
+    GT = GT/scale
+    
+    recon_DGEC = metric_mask.cpu()*recovered_image_DGEC_1.cpu()/scale
+    
+    recon_PnP = metric_mask.cpu()*recovered_image_PNP.cpu()/scale
+
+    error_DGEC = GT - recon_DGEC
+    error_PnP = GT - recon_PnP
+        
+    vmin = torch.min(torch.min(error_DGEC), torch.min(error_PnP)).numpy()
+    vmax = torch.max(torch.max(error_DGEC), torch.max(error_PnP)).numpy()
+
+    
+    fig,axes = plt.subplot_mosaic(figure_mosaic, figsize = (18,12), dpi=200)
+
+    axes["A"].imshow(GT, origin='lower', cmap='gray')
+    axes["B"].imshow(recon_PnP, origin='lower', cmap='gray')
+    axes["C"].imshow(recon_DGEC, origin='lower', cmap='gray')
+    axes["D"].imshow(mask, origin='lower', cmap='gray')
+    im1 = axes["E"].imshow(error_PnP, origin='lower', cmap='bwr',vmin=vmin, vmax=vmax)
+    plt.colorbar(im1, ax=axes["E"],ticks=[vmin,vmin/2,0,vmax/2,vmax])
+    im2 = axes["F"].imshow(error_DGEC, origin='lower', cmap='bwr',vmin=vmin, vmax=vmax)
+    plt.colorbar(im2, ax=axes["F"],ticks=[vmin,vmin/2,0,vmax/2,vmax])
+    
+    axes["A"].set_title("Ground Truth", fontsize = 15)
+    axes["B"].set_title("PnP-PDS Reconstruction", fontsize = 15)
+    axes["C"].set_title("D-GEC Reconstruction", fontsize = 15)
+    axes["D"].set_title("Sampling Mask", fontsize = 15)
+    axes["E"].set_title("PnP-PDS Reconstruction Error", fontsize = 15)
+    axes["F"].set_title("D-GEC Reconstruction Error", fontsize = 15)
+    
+    
+    axes["A"].axes.xaxis.set_visible(False)
+    axes["B"].axes.xaxis.set_visible(False)
+    axes["C"].axes.xaxis.set_visible(False)
+    axes["D"].axes.xaxis.set_visible(False)
+    axes["E"].axes.xaxis.set_visible(False)
+    axes["F"].axes.xaxis.set_visible(False)
+
+    axes["A"].axes.yaxis.set_visible(False)
+    axes["B"].axes.yaxis.set_visible(False)
+    axes["C"].axes.yaxis.set_visible(False)
+    axes["D"].axes.yaxis.set_visible(False)
+    axes["E"].axes.yaxis.set_visible(False)
+    axes["F"].axes.yaxis.set_visible(False)
+    
+    f = plt.figure()
+    f.set_figwidth(5)
+    f.set_figheight(5)
+    plt.plot(np.arange(1,len(PSNR_list_GEC) + 1) , PSNR_list_GEC, 'o-', linewidth=2, label = 'D-GEC')
+    plt.plot(np.arange(1,len(PSNR_list_PnP_PDS) + 1) , PSNR_list_PnP_PDS, 'o-', linewidth=2, label = 'PnP-PDS')
+    plt.title("PSNR vs Iterations", fontsize = 15)
+    font = {'size': 20}
+    plt.xlabel('Iteration', size=20)
+    plt.ylabel('PSNR', size=20)
+    plt.grid()
+    plt.tight_layout()
+    plt.rc('xtick', labelsize=15) 
+    plt.rc('ytick', labelsize=15)
+    plt.legend(fontsize = 15)
+    plt.xscale('log')
+    plt.show()

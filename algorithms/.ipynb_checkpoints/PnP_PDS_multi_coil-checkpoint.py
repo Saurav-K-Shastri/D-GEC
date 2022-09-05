@@ -93,13 +93,14 @@ def PnP_PDS(y, sens_maps_new, mask, wvar, num_of_PnP_PDS_iterations, trained_DnC
     n = y.shape[-1]
         
     PSNR_list_PDS = []
-    
+
+                
     with torch.no_grad():
 
         x = mri.H(y)
         
         recovered_image_PNP = transforms_new.complex_abs(x.squeeze(0).permute(1,2,0))
-        PSNR_list_PDS.append(gutil.calc_psnr((recovered_image_PNP*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
+#         PSNR_list_PDS.append(gutil.calc_psnr((recovered_image_PNP*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
             
         z = torch.zeros_like(y)
         

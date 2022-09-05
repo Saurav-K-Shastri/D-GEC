@@ -1,6 +1,7 @@
 import torch
 from pytorch_wavelets import DWTForward, DWTInverse # (or import DWT, IDWT)
 import time
+from fastMRI_utils import transforms_new
 
 def wave_forward_list(image, xfm):
     """
@@ -572,6 +573,62 @@ def get_my_jittred_batch_2(wave_mat,level,eta_batch,p1m1_mask_batch):
 #     jittred_batch[1:,:,:,:] = jittred_batch[1:,:,:,:] + ((eta*((p1m1_mask*(torch.sign(torch.randn(3*level + 1, wave_mat.shape[1],wave_mat.shape[2],wave_mat.shape[3])).to(device))).permute(1,2,3,0)))/torch.sqrt(torch.tensor(2))).permute(3,0,1,2)
 
 #     return jittred_batch
+
+def get_my_jittred_batch_subband(wave_mat,level,eta_subband,p1m1_mask):
+
+    device = wave_mat.device
+    jittred_batch = torch.zeros(3*level + 2, wave_mat.shape[1],wave_mat.shape[2],wave_mat.shape[3], device = device)
+    
+    jittred_batch[:,:,:,:] = wave_mat.clone().repeat(3*level + 2,1,1,1)
+    
+    noise_mat = (((p1m1_mask*(torch.sign(torch.randn(3*level + 1, wave_mat.shape[1],wave_mat.shape[2],wave_mat.shape[3], device = device)))))/torch.sqrt(torch.tensor(2,device = device)))
+    
+    jittred_batch[1:,:,:,:] = jittred_batch[1:,:,:,:] + (noise_mat.permute(1,2,3,0)*eta_subband).permute(3,0,1,2)
+
+    return jittred_batch, noise_mat
+
+
+
+def get_max_in_each_subband(wave_mat,p1m1_mask):
+    
+    device = wave_mat.device
+    num_of_subbands = p1m1_mask.shape[0]
+    
+    wave_mat_batch = torch.zeros(num_of_subbands, wave_mat.shape[1],wave_mat.shape[2],wave_mat.shape[3], device = device)
+    
+    wave_mat_batch[:,:,:,:] = wave_mat.clone().repeat(num_of_subbands,1,1,1)
+    
+    subband_mask = p1m1_mask*p1m1_mask
+    
+    wave_mat_split_batch = wave_mat_batch*subband_mask
+    
+    wave_mat_split_batch_abs = transforms_new.complex_abs(wave_mat_split_batch.permute(0,2,3,1))
+    
+    max_subbandwise = torch.amax(wave_mat_split_batch_abs, dim=(1,2))
+    
+    return max_subbandwise
+
+
+def get_mean_in_each_subband(wave_mat,p1m1_mask,subband_sizes):
+    
+    device = wave_mat.device
+    num_of_subbands = p1m1_mask.shape[0]
+    
+    wave_mat_batch = torch.zeros(num_of_subbands, wave_mat.shape[1],wave_mat.shape[2],wave_mat.shape[3], device = device)
+    
+    wave_mat_batch[:,:,:,:] = wave_mat.clone().repeat(num_of_subbands,1,1,1)
+    
+    subband_mask = p1m1_mask*p1m1_mask
+    
+    wave_mat_split_batch = wave_mat_batch*subband_mask
+    
+    wave_mat_split_batch_abs = transforms_new.complex_abs(wave_mat_split_batch.permute(0,2,3,1))
+    
+    mean_subbandwise = torch.sum(wave_mat_split_batch_abs, dim=(1,2))/subband_sizes
+    
+    return mean_subbandwise
+
+
 
 
 

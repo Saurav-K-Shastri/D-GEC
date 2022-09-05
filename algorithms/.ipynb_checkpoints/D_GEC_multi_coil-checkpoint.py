@@ -183,3 +183,298 @@ def D_GEC(y, sens_maps_new, mask, wvar, sens_var, num_of_D_GEC_iterations, model
             PSNR_list.append(gutil.calc_psnr((recovered_image_Denoiser_abs*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
                 
     return recovered_image_Denoiser, recovered_image_LMMSE, PSNR_list
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def D_GEC_fast(y, sens_maps_new, mask, wvar, sens_var, num_of_D_GEC_iterations, modelnames, modeldir,theta_damp,zeta_damp, GT_target, metric_mask, Gamma_1_init):
+
+    wavelet = 'haar'
+    level = 4
+    num_of_sbs = 3*level + 1
+    
+    use_DDVAMP_damping = True
+    num_of_CG_iter = 20
+    scale_percentile = 98
+    
+    sigma_w_new = torch.sqrt(wvar + sens_var)
+    
+    device = y.device
+
+    warm_start_for_LMSE =  True
+    warm_start_vec = torch.zeros(1,2,y.shape[2],y.shape[3]).to(device)
+    warm_start_mat = torch.zeros(3*level + 2,2,y.shape[2],y.shape[3]).to(device)
+    
+    xfm = DWTForward(J=level, mode='symmetric', wave=wavelet).to(device)  # Accepts all wave types available to PyWavelets
+    ifm = DWTInverse(mode='symmetric', wave=wavelet).to(device)
+       
+    idx1_complement = np.where(mask == 0)[0]
+    idx2_complement = np.where(mask == 0)[1]
+    idx1 = np.where(mask == 1)[0]
+    idx2 = np.where(mask == 1)[1]
+    
+    B_op_foo = B_op_multi(idx1_complement,idx2_complement,xfm,ifm, level, sens_maps_new)
+                      
+    r1_bar_t = B_op_foo.H(y)
+    GAMMA_1_full = Gamma_1_init
+
+    GAMMA_2_full = GAMMA_1_full.clone()
+    
+    p1m1_mask, subband_sizes = wutils.get_p1m1_mask_and_subband_sizes(torch.zeros_like(r1_bar_t),level)
+    p1m1_mask = p1m1_mask.to(device)
+    subband_sizes = subband_sizes.to(device)
+
+
+    std_ranges = torch.tensor(np.array([0, 10, 20, 50, 120, 500]) / 255).to(device)
+    
+    modeldirs = [None] * len(modelnames)
+    std_channels = 3 * level + 1
+    
+    verbose_req = False
+    for i, modelname in enumerate(modelnames):
+        modeldirs[i] = os.path.join(modeldir, '{}'.format(modelname))
+    
+    changeFactor = 1
+    
+    # DnCNN cpc Denoiser
+    ColoredDnCNN_GEC_denoiser_complex = dutils.DnCNN_cpc_VDAMP_true_complex_batch(modeldirs, std_ranges, xfm,ifm, p1m1_mask, subband_sizes, std_channels=std_channels,  beta_tune = torch.tensor(1).to(device), device=device, verbose=verbose_req, level = level,scale_percentile = scale_percentile,changeFactor= changeFactor)
+
+    #LMMSE Denoiser
+    LMSE_denoiser_CG_warm = dutils.LMSE_batch_CG_GEC_with_div_and_warm_strt_multi_coil(y, idx1_complement, idx2_complement, sigma_w_new, xfm, ifm, p1m1_mask, subband_sizes, sens_maps_new, 4, 20,torch.tensor(1), torch.tensor(1e-4),changeFactor = changeFactor)
+
+    PSNR_list = []
+    
+    recovered_image_init = transforms_new.complex_abs((wutils.wave_inverse_mat(r1_bar_t.clone(),ifm, level)).squeeze(0).permute(1,2,0))
+    PSNR_list.append(gutil.calc_psnr((recovered_image_init*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
+
+    
+    with torch.no_grad():
+        
+        for iter in range(num_of_D_GEC_iterations):            
+            
+            # Linear Stage
+            x_1_bar_cap_t, D1_t, warm_start_mat = LMSE_denoiser_CG_warm(r1_bar_t, (1/GAMMA_1_full),warm_start_mat, True)
+
+        
+            D1_t = D1_t.reshape(1,3*level + 1)
+            D1_t = torch.abs(D1_t)
+            
+            recovered_image_LMMSE = wutils.wave_inverse_mat(x_1_bar_cap_t.clone(),ifm, level)
+
+            if iter>0:
+                r2_bar_t_old = r2_bar_t.clone()
+                GAMMA_2_full_old = GAMMA_2_full.clone()
+
+            fac1 = 1/(1 - D1_t)
+
+            r2_bar_t_foo = wutils.wave_sub_list(wutils.wave_mat2list(x_1_bar_cap_t),wutils.wave_scalar_mul_subbandwise_list(wutils.wave_mat2list(r1_bar_t), D1_t))
+            r2_bar_t = wutils.get_wave_mat(wutils.wave_scalar_mul_subbandwise_list(r2_bar_t_foo,fac1))
+
+            GAMMA_2_full = GAMMA_1_full*((1/D1_t) - 1)
+            GAMMA_2_full = torch.clip(GAMMA_2_full, 1e-21, 1e21)
+            
+            
+            # Denoiser Stage
+            x_2_bar_cap_t, D2_t = ColoredDnCNN_GEC_denoiser_complex(r2_bar_t, 1/(GAMMA_2_full))
+            D2_t = D2_t.reshape(1,3*level + 1)
+            D2_t = torch.abs(D2_t)
+
+            recovered_image_Denoiser = wutils.wave_inverse_mat(x_2_bar_cap_t,ifm,level)
+            recovered_image_Denoiser_abs = transforms_new.complex_abs((wutils.wave_inverse_mat(x_2_bar_cap_t.clone(),ifm, level)).squeeze(0).permute(1,2,0))
+
+            if use_DDVAMP_damping == True:
+                if iter>0:
+                    D2_t = (theta_damp*torch.sqrt(D2_t) + (1 - theta_damp)*torch.sqrt(D2_t_old))**2
+
+            D2_t_old = D2_t.clone()
+            fac11 = 1/(1 - D2_t)
+
+            r1_bar_t_foo = wutils.wave_sub_list(wutils.wave_mat2list(x_2_bar_cap_t),wutils.wave_scalar_mul_subbandwise_list(wutils.wave_mat2list(r2_bar_t), D2_t))
+            r1_bar_t = wutils.get_wave_mat(wutils.wave_scalar_mul_subbandwise_list(r1_bar_t_foo,fac11))
+
+            GAMMA_1_full = GAMMA_2_full*((1/D2_t) - 1)
+            GAMMA_1_full = torch.clip(GAMMA_1_full, 1e-21, 1e21)
+
+            if use_DDVAMP_damping == True:
+                if iter>0:
+                    r1_bar_t = wutils.get_wave_mat(wutils.wave_add_list(wutils.wave_scalar_mul_list(wutils.wave_mat2list(r1_bar_t),zeta_damp),wutils.wave_scalar_mul_list(wutils.wave_mat2list(r1_bar_t_old),(1 - zeta_damp))))
+                    GAMMA_1_full = (1/(zeta_damp*torch.sqrt(1/GAMMA_1_full) + (1-zeta_damp)*torch.sqrt(1/GAMMA_1_full_old)))**2
+
+            r1_bar_t_old = r1_bar_t.clone()
+            GAMMA_1_full_old = GAMMA_1_full.clone()
+            
+            PSNR_list.append(gutil.calc_psnr((recovered_image_Denoiser_abs*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
+                
+    return recovered_image_Denoiser, recovered_image_LMMSE, PSNR_list
+
+
+
+#incomplete
+# def D_GEC_slow(y, sens_maps_new, mask, wvar, sens_var, num_of_D_GEC_iterations, modelnames, modeldir,theta_damp,zeta_damp, GT_target, metric_mask, mode, Gamma_1_init):
+
+#     wavelet = 'haar'
+#     level = 4
+#     num_of_sbs = 3*level + 1
+    
+#     use_DDVAMP_damping = True
+#     num_of_CG_iter = 20
+#     scale_percentile = 98
+    
+#     sigma_w_new = torch.sqrt(wvar + sens_var)
+    
+#     device = y.device
+
+#     warm_start_for_LMSE =  True
+#     warm_start_vec = torch.zeros(1,2,y.shape[2],y.shape[3]).to(device)
+#     warm_start_mat = torch.zeros(3*level + 2,2,y.shape[2],y.shape[3]).to(device)
+    
+#     xfm = DWTForward(J=level, mode='symmetric', wave=wavelet).to(device)  # Accepts all wave types available to PyWavelets
+#     ifm = DWTInverse(mode='symmetric', wave=wavelet).to(device)
+       
+#     idx1_complement = np.where(mask == 0)[0]
+#     idx2_complement = np.where(mask == 0)[1]
+#     idx1 = np.where(mask == 1)[0]
+#     idx2 = np.where(mask == 1)[1]
+    
+#     B_op_foo = B_op_multi(idx1_complement,idx2_complement,xfm,ifm, level, sens_maps_new)
+
+    
+#     # To find Zero Region masks in each wavelet subband
+#     dum = torch.ones(1,8,368,368,2,device = device)
+#     out_dum = transforms_new.complex_abs(torch.sum(transforms_new.complex_mult(dum, transforms_new.complex_conj(sens_maps_new.unsqueeze(0))),dim = 1)[0,:,:])
+#     wave_sens_mask = torch.ones(out_dum.shape) - 1*(out_dum.cpu()==0)
+#     yl_wave_sens_mask, yh_wave_sens_mask = wutils.wave_forward_list(torch.zeros(1,2,368,368).to(device),xfm)
+
+#     for i in range(level):
+#         xfm_foo = DWTForward(J=i+1, mode='symmetric', wave=wavelet).to(device)  # Accepts all wave types available to PyWavelets
+#         yl_foo,yh_foo = wutils.wave_forward_list(wave_sens_mask.unsqueeze(0).unsqueeze(0).to(device),xfm_foo)
+
+#         yh_wave_sens_mask[i][0,0,0,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+#         yh_wave_sens_mask[i][0,1,0,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+
+#         yh_wave_sens_mask[i][0,0,1,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+#         yh_wave_sens_mask[i][0,1,1,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+
+#         yh_wave_sens_mask[i][0,0,2,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+#         yh_wave_sens_mask[i][0,1,2,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+
+#         if i == 3:
+#             yl_wave_sens_mask[0,0,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+#             yl_wave_sens_mask[0,1,:,:] = 1*(torch.abs(yl_foo[0,0,:,:])>0)
+
+                      
+#     # r1_bar_t and Gamma_1 initialization for fast and slow modes
+#     if mode =='fast':
+#         r1_bar_t = B_op_foo.H(y)
+#         GAMMA_1_full = Gamma_1_init
+#     else:
+#         orig_r1_bar_t_init = B_op_foo.H(y)
+#         orig_r1_init_std = torch.sqrt(1/Gamma_1_init)
+#         r1_bar_t = wutils.get_wave_mat(wutils.add_noise_subbandwise_list_with_wave_mask(wutils.wave_mat2list(orig_r1_bar_t_init),9*orig_r1_init_std, [yl_wave_sens_mask, yh_wave_sens_mask]))
+#         GAMMA_1_full = 100*Gamma_1_init
+
+#     GAMMA_2_full = GAMMA_1_full.clone()
+    
+#     p1m1_mask, subband_sizes = wutils.get_p1m1_mask_and_subband_sizes(torch.zeros_like(r1_bar_t),level)
+#     p1m1_mask = p1m1_mask.to(device)
+#     subband_sizes = subband_sizes.to(device)
+
+
+#     std_ranges = torch.tensor(np.array([0, 10, 20, 50, 120, 500]) / 255).to(device)
+    
+#     modeldirs = [None] * len(modelnames)
+#     std_channels = 3 * level + 1
+    
+#     verbose_req = False
+#     for i, modelname in enumerate(modelnames):
+#         modeldirs[i] = os.path.join(modeldir, '{}'.format(modelname))
+    
+#     changeFactor = 1
+    
+#     # DnCNN cpc Denoiser
+#     ColoredDnCNN_GEC_denoiser_complex = dutils.DnCNN_cpc_VDAMP_true_complex_batch(modeldirs, std_ranges, xfm,ifm, p1m1_mask, subband_sizes, std_channels=std_channels,  beta_tune = torch.tensor(1).to(device), device=device, verbose=verbose_req, level = level,scale_percentile = scale_percentile,changeFactor)
+
+#     #LMMSE Denoiser
+#     LMSE_denoiser_CG_warm_slow = dutils.LMSE_batch_CG_GEC_with_div_and_warm_strt_multi_coil(y, idx1_complement, idx2_complement, sigma_w_new, xfm, ifm, p1m1_mask, subband_sizes, sens_maps_new, 4, 150,torch.tensor(1), torch.tensor(1e-4),changeFactor)
+#     LMSE_denoiser_CG_warm = dutils.LMSE_batch_CG_GEC_with_div_and_warm_strt_multi_coil(y, idx1_complement, idx2_complement, sigma_w_new, xfm, ifm, p1m1_mask, subband_sizes, sens_maps_new, 4, 20,torch.tensor(1), torch.tensor(1e-4),changeFactor)
+
+#     PSNR_list = []
+    
+#     recovered_image_init = transforms_new.complex_abs((wutils.wave_inverse_mat(r1_bar_t.clone(),ifm, level)).squeeze(0).permute(1,2,0))
+#     PSNR_list.append(gutil.calc_psnr((recovered_image_init*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
+
+    
+#     with torch.no_grad():
+        
+#         for iter in range(num_of_D_GEC_iterations):            
+            
+#             # Linear Stage
+#             x_1_bar_cap_t, D1_t, warm_start_mat = LMSE_denoiser_CG_warm(r1_bar_t, (1/GAMMA_1_full),warm_start_mat, True)
+
+        
+#             D1_t = D1_t.reshape(1,3*level + 1)
+#             D1_t = torch.abs(D1_t)
+            
+#             recovered_image_LMMSE = wutils.wave_inverse_mat(x_1_bar_cap_t.clone(),ifm, level)
+
+#             if iter>0:
+#                 r2_bar_t_old = r2_bar_t.clone()
+#                 GAMMA_2_full_old = GAMMA_2_full.clone()
+
+#             fac1 = 1/(1 - D1_t)
+
+#             r2_bar_t_foo = wutils.wave_sub_list(wutils.wave_mat2list(x_1_bar_cap_t),wutils.wave_scalar_mul_subbandwise_list(wutils.wave_mat2list(r1_bar_t), D1_t))
+#             r2_bar_t = wutils.get_wave_mat(wutils.wave_scalar_mul_subbandwise_list(r2_bar_t_foo,fac1))
+
+#             GAMMA_2_full = GAMMA_1_full*((1/D1_t) - 1)
+#             GAMMA_2_full = torch.clip(GAMMA_2_full, 1e-21, 1e21)
+            
+            
+#             # Denoiser Stage
+#             x_2_bar_cap_t, D2_t = ColoredDnCNN_GEC_denoiser_complex(r2_bar_t, 1/(GAMMA_2_full))
+#             D2_t = D2_t.reshape(1,3*level + 1)
+#             D2_t = torch.abs(D2_t)
+
+#             recovered_image_Denoiser = wutils.wave_inverse_mat(x_2_bar_cap_t,ifm,level)
+#             recovered_image_Denoiser_abs = transforms_new.complex_abs((wutils.wave_inverse_mat(x_2_bar_cap_t.clone(),ifm, level)).squeeze(0).permute(1,2,0))
+
+#             if use_DDVAMP_damping == True:
+#                 if iter>0:
+#                     D2_t = (theta_damp*torch.sqrt(D2_t) + (1 - theta_damp)*torch.sqrt(D2_t_old))**2
+
+#             D2_t_old = D2_t.clone()
+#             fac11 = 1/(1 - D2_t)
+
+#             r1_bar_t_foo = wutils.wave_sub_list(wutils.wave_mat2list(x_2_bar_cap_t),wutils.wave_scalar_mul_subbandwise_list(wutils.wave_mat2list(r2_bar_t), D2_t))
+#             r1_bar_t = wutils.get_wave_mat(wutils.wave_scalar_mul_subbandwise_list(r1_bar_t_foo,fac11))
+
+#             GAMMA_1_full = GAMMA_2_full*((1/D2_t) - 1)
+#             GAMMA_1_full = torch.clip(GAMMA_1_full, 1e-21, 1e21)
+
+#             if use_DDVAMP_damping == True:
+#                 if iter>0:
+#                     r1_bar_t = wutils.get_wave_mat(wutils.wave_add_list(wutils.wave_scalar_mul_list(wutils.wave_mat2list(r1_bar_t),zeta_damp),wutils.wave_scalar_mul_list(wutils.wave_mat2list(r1_bar_t_old),(1 - zeta_damp))))
+#                     GAMMA_1_full = (1/(zeta_damp*torch.sqrt(1/GAMMA_1_full) + (1-zeta_damp)*torch.sqrt(1/GAMMA_1_full_old)))**2
+
+#             r1_bar_t_old = r1_bar_t.clone()
+#             GAMMA_1_full_old = GAMMA_1_full.clone()
+            
+#             PSNR_list.append(gutil.calc_psnr((recovered_image_Denoiser_abs*metric_mask).cpu(), (GT_target*metric_mask).cpu(), max = (GT_target*metric_mask).max().cpu()))
+                
+#     return recovered_image_Denoiser, recovered_image_LMMSE, PSNR_list
+
+
+
+
