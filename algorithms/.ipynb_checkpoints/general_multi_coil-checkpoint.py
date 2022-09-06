@@ -632,17 +632,22 @@ def run_fast_DGEC_and_PnP(dataset,R,sampling_pattern,image_number,model_dir,data
     GT = metric_mask.cpu()*GT_target_abs.cpu()
     scale = torch.max(GT)
     GT = GT/scale
-    
-    recon_DGEC = metric_mask.cpu()*recovered_image_DGEC_1.cpu()/scale
-    
-    recon_PnP = metric_mask.cpu()*recovered_image_PNP.cpu()/scale
 
-    error_DGEC = GT - recon_DGEC
-    error_PnP = GT - recon_PnP
-        
+
+    error_mag_DGEC = transforms_new.complex_abs(GT_target_complex.squeeze(0).permute(1,2,0) - (x_D_GEC_denoiser.clone()).squeeze(0).permute(1,2,0))
+    error_mag_PnP =  transforms_new.complex_abs(GT_target_complex.squeeze(0).permute(1,2,0) - (x_PnP_PDS.clone()).squeeze(0).permute(1,2,0))
+
+
+    recon_DGEC = metric_mask.cpu()*recovered_image_DGEC_1.cpu()/scale
+    recon_PnP = metric_mask.cpu()*recovered_image_PNP.cpu()/scale
+    
+
+    error_DGEC = metric_mask.cpu()*error_mag_DGEC.cpu()/scale
+    error_PnP = metric_mask.cpu()*error_mag_PnP.cpu()/scale
+    
     vmin = torch.min(torch.min(error_DGEC), torch.min(error_PnP)).numpy()
     vmax = torch.max(torch.max(error_DGEC), torch.max(error_PnP)).numpy()
-
+    
     
     fig,axes = plt.subplot_mosaic(figure_mosaic, figsize = (18,12), dpi=200)
 
@@ -651,16 +656,17 @@ def run_fast_DGEC_and_PnP(dataset,R,sampling_pattern,image_number,model_dir,data
     axes["C"].imshow(recon_DGEC, origin='lower', cmap='gray')
     axes["D"].imshow(mask, origin='lower', cmap='gray')
     im1 = axes["E"].imshow(error_PnP, origin='lower', cmap='bwr',vmin=vmin, vmax=vmax)
-    plt.colorbar(im1, ax=axes["E"],ticks=[vmin,vmin/2,0,vmax/2,vmax])
+    plt.colorbar(im1, ax=axes["E"],ticks=[vmin,vmax/4,vmax/2,3*vmax/4,vmax])
     im2 = axes["F"].imshow(error_DGEC, origin='lower', cmap='bwr',vmin=vmin, vmax=vmax)
-    plt.colorbar(im2, ax=axes["F"],ticks=[vmin,vmin/2,0,vmax/2,vmax])
+    plt.colorbar(im2, ax=axes["F"],ticks=[vmin,vmax/4,vmax/2,3*vmax/4,vmax])
     
-    axes["A"].set_title("Ground Truth", fontsize = 15)
-    axes["B"].set_title("PnP-PDS Reconstruction", fontsize = 15)
-    axes["C"].set_title("D-GEC Reconstruction", fontsize = 15)
-    axes["D"].set_title("Sampling Mask", fontsize = 15)
-    axes["E"].set_title("PnP-PDS Reconstruction Error", fontsize = 15)
-    axes["F"].set_title("D-GEC Reconstruction Error", fontsize = 15)
+    
+    axes["A"].set_title("Ground Truth", fontsize = 12)
+    axes["B"].set_title("PnP-PDS Reconstruction", fontsize = 12)
+    axes["C"].set_title("D-GEC Reconstruction", fontsize = 12)
+    axes["D"].set_title("Sampling Mask", fontsize = 12)
+    axes["E"].set_title("PnP-PDS Reconstruction Error", fontsize = 12)
+    axes["F"].set_title("D-GEC Reconstruction Error", fontsize = 12)
     
     
     axes["A"].axes.xaxis.set_visible(False)
@@ -693,3 +699,333 @@ def run_fast_DGEC_and_PnP(dataset,R,sampling_pattern,image_number,model_dir,data
     plt.legend(fontsize = 15)
     plt.xscale('log')
     plt.show()
+
+    
+    
+    
+
+def get_DGEC_behavior(image_number,model_dir,data_dir,device):
+    
+    ##################################################################
+    """
+    Important Note: To obtain good QQ plots and SD evolution plots for all options (dataset,R,sampling_pattern), appropriate tweaking of number of CG iterations, EM iterations, and few other parameters will be required. We have optimized for knee data, line sampling, and R = 4
+    """
+    ##################################################################
+
+    print("Image Number : ", image_number)
+    print(" ")
+    
+    random.seed(10)
+    
+        
+    modelnames_cpc = ['checkpoint_last_DnCNN_cpc_0_10_knee.pt','checkpoint_last_DnCNN_cpc_10_20_knee.pt', 'checkpoint_last_DnCNN_cpc_20_50_knee.pt', 'checkpoint_last_DnCNN_cpc_50_120_knee.pt', 'checkpoint_last_DnCNN_cpc_120_500_knee.pt']    
+    modeldir_cpc = model_dir
+    model_PnP_PDS = model_dir+'checkpoint_last_DnCNN_0_50_knee.pt'
+
+    sens_var = torch.tensor(1.48375e-11,device = device) # noise variance introduced by imperfect sens-map estimation by ESPIRiT # computed this number by taking average over training data
+
+
+    mdic = loadmat(data_dir+"R_4_VD_line_SNR_40_data_knee.mat")
+    GAMMA_1_init_DGEC_1 = torch.tensor([2.7596e+08, 2.7130e+09, 8.2882e+07, 6.9745e+08, 3.9486e+09, 2.2255e+08, 2.0695e+09, 7.7411e+09, 1.2643e+09, 7.2054e+09, 1.7055e+10, 6.4233e+09,2.1743e+10], device=device).reshape(1,13) #
+    GAMMA_1_init_DGEC_2 = torch.tensor([3.3836e+06, 3.2976e+07, 1.0164e+06, 8.4299e+06, 4.8456e+07, 2.7221e+06,2.5440e+07, 9.4491e+07, 1.5337e+07, 8.7689e+07, 2.0828e+08, 7.8276e+07,2.6487e+08], device=device).reshape(1,13) 
+
+    num_of_D_GEC_iterations = 20 #
+    theta_damp = 0.2 #
+    zeta_damp = 0.2 #
+
+                                                  
+    y_mat = mdic['y_mat']
+    GT_target_complex_mat = mdic['GT_target_complex_mat']
+    sens_maps_mat = mdic['sens_maps_mat']
+    mask_mat = mdic['mask_mat']
+    prob_map_mat = mdic['prob_map_mat']
+    sigma_w_square_mat = mdic['sigma_w_square_mat']
+    M_mat = mdic['M_mat']
+    N_mat = mdic['N_mat']
+    metric_mask_mat = mdic['metric_mask_mat']
+    GT_target_abs_mat = mdic['GT_target_abs_mat']
+
+
+    y_foo = transforms_new.to_tensor(y_mat[image_number]).permute(2,0,1,3)
+    y = (torch.cat((y_foo[:,:,:,0], y_foo[:,:,:,1]), dim = 0).unsqueeze(0)).to(device)
+    GT_target_complex = transforms_new.to_tensor(GT_target_complex_mat[image_number]).permute(2,0,1).unsqueeze(0).to(device)
+    sens_maps_new = transforms_new.to_tensor(sens_maps_mat[image_number]).permute(2,0,1,3).to(device)
+    mask = mask_mat[image_number,:,:]
+    prob_map = prob_map_mat[image_number,:,:]
+    wvar = torch.tensor(sigma_w_square_mat[image_number,0],device=device)
+    M = M_mat[image_number,0]
+    N = N_mat[image_number,0]
+    metric_mask = transforms_new.to_tensor(metric_mask_mat[image_number,:,:]).to(device)
+    GT_target_abs = transforms_new.to_tensor(GT_target_abs_mat[image_number,:,:]).to(device)
+
+    y = y.type('torch.FloatTensor').to(device)
+    GT_target_complex = GT_target_complex.type('torch.FloatTensor').to(device)
+    sens_maps_new = sens_maps_new.type('torch.FloatTensor').to(device)
+    
+                                    
+    ## DGEC
+    print("running slow version of D-GEC...")     
+    x_D_GEC_denoiser, PSNR_list_GEC, r2_bar_t_mat, wave_GT, GAMMA_2_full_mat, GAMMA_2_full_true_mat, yh_wave_sens_mask = D_GEC_multi_coil.D_GEC_slow(y, sens_maps_new, mask, wvar, sens_var, num_of_D_GEC_iterations, modelnames_cpc, modeldir_cpc ,theta_damp,zeta_damp, GT_target_abs, metric_mask, GAMMA_1_init_DGEC_1,GAMMA_1_init_DGEC_2, GT_target_complex)
+    
+    recovered_image_DGEC_1 = transforms_new.complex_abs(x_D_GEC_denoiser.squeeze(0).permute(1,2,0))
+                   
+    print('Done!')
+                                                  
+    # Metric
+
+    PSNR_D_GEC_Den = gutil.calc_psnr((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu(), max = (GT_target_abs*metric_mask).max().cpu())
+
+    rSNR_D_GEC_Den = gutil.calc_rSNR_non_DB_scale((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+
+    SSIM_D_GEC_Den = gutil.calc_SSIM((recovered_image_DGEC_1*metric_mask).cpu(), (GT_target_abs*metric_mask).cpu())
+    
+    print(" ")
+    print("Results : ")
+    print(" ")
+    print("Metrics  |   PSNR    |    SSIM   ")
+    print("------------------------------------")
+    print("D-GEC    |  ", format(np.round(PSNR_D_GEC_Den,2),'.2f'), "  |  ", format(np.round(SSIM_D_GEC_Den,4),'.4f'))
+    print("------------------------------------")
+    print(" ")
+    
+    
+    get_req_image(mask, metric_mask,GT_target_abs, GT_target_complex, x_D_GEC_denoiser,r2_bar_t_mat, wave_GT,PSNR_list_GEC,7)
+    get_qq_plots(0,r2_bar_t_mat,wave_GT, yh_wave_sens_mask)
+    get_qq_plots(9,r2_bar_t_mat,wave_GT, yh_wave_sens_mask)
+    get_gamma_2_plot(GAMMA_2_full_true_mat,GAMMA_2_full_mat)
+    
+
+def get_req_image(mask, metric_mask,GT_target_abs, GT_target_complex, x_D_GEC_denoiser,r2_bar_t_mat, wave_GT,PSNR_list_GEC,iter_choose):
+
+    wavelet = 'haar'
+    level = 4
+    num_of_sbs = 3*level + 1
+    xfm = DWTForward(J=level, mode='symmetric', wave=wavelet).to(device)
+    ifm = DWTInverse(mode='symmetric', wave=wavelet).to(device)
+    
+    recovered_image_DGEC_1 = transforms_new.complex_abs(x_D_GEC_denoiser.squeeze(0).permute(1,2,0))
+    error_mag_DGEC = transforms_new.complex_abs(GT_target_complex.squeeze(0).permute(1,2,0) - (x_D_GEC_denoiser.clone()).squeeze(0).permute(1,2,0))
+    
+    GT = metric_mask.cpu()*GT_target_abs.cpu()
+    scale = torch.max(GT)
+    GT = GT/scale
+    
+    recon = metric_mask.cpu()*recovered_image_DGEC_1.cpu()/scale
+    error = metric_mask.cpu()*error_mag_DGEC.cpu()/scale
+    
+    vmin = torch.min(error).numpy()
+    vmax = torch.max(error).numpy()
+    
+    
+    flipud_x0_dummy = flipud_wavelet(wave_GT.cpu().clone())
+    flipud_r2_iter= flipud_wavelet(r2_bar_t_mat[iter_choose,:,:,:,:].cpu().clone())
+
+    eff_noise =  flipud_x0_dummy - flipud_r2_iter
+    eff_noise_abs = transforms_new.complex_abs(eff_noise.permute(0,2,3,1)).squeeze(0)
+    r2_iter_abs = transforms_new.complex_abs(flipud_r2_iter.cpu().permute(0,2,3,1)).squeeze(0)
+    true_wavelet = transforms_new.complex_abs(flipud_x0_dummy.cpu().permute(0,2,3,1)).squeeze(0)
+
+    scale2 = torch.max(true_wavelet)
+    true_wavelet = true_wavelet/scale2
+    r2_iter_abs = r2_iter_abs/scale2
+    eff_noise_abs = eff_noise_abs/scale2
+
+    vmin2 = torch.min(eff_noise_abs).numpy()
+    vmax2 = torch.max(eff_noise_abs).numpy()
+
+
+
+    figure_mosaic = """
+    ACE
+    BDF
+    """  
+        
+    fig,axes = plt.subplot_mosaic(figure_mosaic, figsize = (18,12), dpi=200)
+
+    axes["A"].imshow(mask, origin='lower', cmap='gray')
+    axes["B"].plot(np.arange(1,len(PSNR_list_GEC) + 1) , PSNR_list_GEC, 'o-', linewidth=2)
+    axes["C"].imshow(GT, origin='lower', cmap='gray')
+    axes["D"].imshow(recon, origin='lower', cmap='gray')
+    im1 = axes["E"].imshow(error, origin='lower', cmap='terrain',vmin=vmin, vmax=vmax)
+    plt.colorbar(im1, ax=axes["E"],ticks=[vmin,vmax/4,vmax/2,3*vmax/4,vmax])    
+    im2 = axes["F"].imshow(eff_noise_abs, origin='upper', cmap='terrain',vmin=vmin2, vmax=vmax2)
+    plt.colorbar(im2, ax=axes["F"],ticks=[vmin2,vmax2/4,vmax2/2,3*vmax2/4,vmax2])    
+
+    axes["B"].set_xlim((1,len(PSNR_list_GEC)+1))
+    
+    
+    axes["A"].set_title("Sampling Mask", fontsize = 12)
+    axes["B"].set_title("PSNR vs Iterations", fontsize = 12)
+    axes["C"].set_title("Ground Truth", fontsize = 12)
+    axes["D"].set_title("Reconstruction", fontsize = 12)
+    axes["E"].set_title("Reconstruction Error", fontsize = 12)
+    axes["F"].set_title("Wavelet Error at Iteration {}".format(iter_choose+1), fontsize = 12)
+    
+    axes["B"].set_xlabel('Iteration',fontsize = 12)
+    axes["B"].set_ylabel('PSNR',fontsize = 12)
+                    
+    
+    axes["A"].axes.xaxis.set_visible(False)
+    axes["C"].axes.xaxis.set_visible(False)
+    axes["D"].axes.xaxis.set_visible(False)
+    axes["E"].axes.xaxis.set_visible(False)
+    axes["F"].axes.xaxis.set_visible(False)
+                   
+    axes["A"].axes.yaxis.set_visible(False)
+    axes["C"].axes.yaxis.set_visible(False)
+    axes["D"].axes.yaxis.set_visible(False)
+    axes["E"].axes.yaxis.set_visible(False)
+    axes["F"].axes.yaxis.set_visible(False)
+    
+    
+def flipud_wavelet(wave_mat):
+    
+    [myyl,myyh] = wutils.wave_mat2list(wave_mat)
+    
+    
+    myyl[0,0,:,:] = torch.flipud(myyl[0,0,:,:])
+    myyl[0,1,:,:] = torch.flipud(myyl[0,1,:,:])
+    for i in range(4):
+        for j in range(3):
+            myyh[i][0,0,j,:,:] = torch.flipud(myyh[i][0,0,j,:,:])
+            myyh[i][0,1,j,:,:] = torch.flipud(myyh[i][0,1,j,:,:])   
+            
+    wave_out = wutils.get_wave_mat([myyl,myyh])
+    
+    return wave_out
+                   
+
+def get_qq_plots(iter_choose,r2_bar_t_mat,wave_GT, yh_wave_sens_mask):
+
+    error_list = wutils.wave_mat2list(r2_bar_t_mat[iter_choose,:,:,:,:].clone()-wave_GT)
+
+    idx_level_1 = torch.where(yh_wave_sens_mask[0][0,0,0,:,:]==1)
+    idx_level_2 = torch.where(yh_wave_sens_mask[1][0,0,0,:,:]==1)
+    idx_level_3 = torch.where(yh_wave_sens_mask[2][0,0,0,:,:]==1)
+    idx_level_4 = torch.where(yh_wave_sens_mask[3][0,0,0,:,:]==1)
+
+    mosaic = """
+    ABC
+    EFG
+    """
+
+
+    # fig, ax = plt.subplots(1, level, figsize=(20, 5))
+    plt.rcParams["font.family"] = "serif"
+
+    fig = plt.figure(constrained_layout=True)
+    fig.set_figwidth(15)
+    fig.set_figheight(10)
+    ax_dict = fig.subplot_mosaic(mosaic)
+    # identify_axes(ax_dict)
+
+    sm.qqplot(error_list[1][0][0,0,0,idx_level_1[0],idx_level_1[1]].cpu(), fit=True, line='45', ax=ax_dict["A"])
+    sm.qqplot(error_list[1][1][0,0,1,idx_level_2[0],idx_level_2[1]].cpu(), fit=True, line='45', ax=ax_dict["B"])
+    sm.qqplot(error_list[1][2][0,0,2,idx_level_3[0],idx_level_3[1]].cpu(), fit=True, line='45', ax=ax_dict["C"])
+
+    sm.qqplot(error_list[1][0][0,1,0,idx_level_1[0],idx_level_1[1]].cpu(), fit=True, line='45', ax=ax_dict["E"])
+    sm.qqplot(error_list[1][1][0,1,1,idx_level_2[0],idx_level_2[1]].cpu(), fit=True, line='45', ax=ax_dict["F"])
+    sm.qqplot(error_list[1][2][0,1,2,idx_level_3[0],idx_level_3[1]].cpu(), fit=True, line='45', ax=ax_dict["G"])
+
+    # .set_title('{}, Scale {}'.format(s, 3-b+1),fontsize = 18)
+
+    ax_dict["A"].set_title('Horizontal, Scale 1, Real',fontsize = 20)
+    ax_dict["B"].set_title('Vertical, Scale 2, Real',fontsize = 20)
+    ax_dict["C"].set_title('Diagonal, Scale 3, Real',fontsize = 20)
+    ax_dict["E"].set_title('Horizontal, Scale 1, Imaginary',fontsize = 20)
+    ax_dict["F"].set_title('Vertical, Scale 2, Imaginary',fontsize = 20)
+    ax_dict["G"].set_title('Diagonal, Scale 3, Imaginary',fontsize = 20)
+
+
+
+    ax_dict["A"].set_xlabel('',fontsize = 20)
+    ax_dict["A"].set_ylabel('Quantiles of Input Sample',fontsize = 20)
+    ax_dict["B"].set_xlabel('',fontsize = 20)
+    ax_dict["B"].set_ylabel('',fontsize = 20)
+    ax_dict["C"].set_xlabel('',fontsize = 20)
+    ax_dict["C"].set_ylabel('',fontsize = 20)
+    ax_dict["E"].set_xlabel('Standard Normal Quantiles',fontsize = 20)
+    ax_dict["E"].set_ylabel('Quantiles of Input Sample',fontsize = 20)
+    ax_dict["F"].set_xlabel('Standard Normal Quantiles',fontsize = 20)
+    ax_dict["F"].set_ylabel('',fontsize = 20)
+    ax_dict["G"].set_xlabel('Standard Normal Quantiles',fontsize = 20)
+    ax_dict["G"].set_ylabel('',fontsize = 20)
+
+    fig.suptitle('QQ-plots of the real and imaginary parts of subband errors at iteration {}'.format(iter_choose+1), fontsize=25)
+                   
+    plt.show()
+
+
+
+            
+def get_gamma_2_plot(GAMMA_2_full_true_mat,GAMMA_2_full_mat):
+                   
+    level = 4
+    
+    fig, ax = plt.subplots(1, level, figsize=(25, 6), dpi=120 )
+    iteration_count = np.arange(GAMMA_2_full_true_mat.shape[0]) 
+    tau_full = (1/torch.sqrt(GAMMA_2_full_true_mat)).cpu()
+    err_full = (1/torch.sqrt(GAMMA_2_full_mat)).cpu()
+
+    tau = tau_full[:,:]
+    err = err_full[:,:]
+    
+    SUBBAND = ['Coarse', 'Horizontal', 'Vertical', 'Diagonal']
+    SUBBAND_COLOR = ['k', 'b', 'r', 'g']
+
+    ax[0].plot(iteration_count,((tau[:,0])),linewidth=2,
+                ls='-', c=SUBBAND_COLOR[0],
+                label='True {}'.format(SUBBAND[0]))
+    ax[0].plot(iteration_count,((err[:,0])),linewidth=2,marker='o',
+                ls=':', c=SUBBAND_COLOR[0],
+                label='Predicted {}'.format(SUBBAND[0]))
+
+    for b in range(1):
+        for s in range(3):
+            ax[b].plot(iteration_count,((tau[:,b+s+1])),linewidth=2,
+                    ls='-', c=SUBBAND_COLOR[s + 1],
+                    label=' True {}'.format(SUBBAND[s + 1]))
+            ax[b].plot(iteration_count,((err[:,b+s+1])),linewidth=2,marker='o',
+                    ls=':', c=SUBBAND_COLOR[s + 1],
+                    label='Predicted {}'.format(SUBBAND[s + 1]))
+
+        ax[b].set_xlabel('Iteration',fontsize = 25)
+        ax[b].set_ylabel('Standard Deviation',fontsize = 25)
+        ax[b].set_title('Scale {}'.format(3 - b + 1),fontsize = 25)
+
+
+    for b in range(level-1):
+        b = b + 1
+        for s in range(3):
+            ax[b].plot(iteration_count,((tau[:,(3*b)+s+1])),linewidth=2,
+                    ls='-', c=SUBBAND_COLOR[s + 1])
+            ax[b].plot(iteration_count,((err[:,(3*b)+s+1])),linewidth=2,marker='o',
+                    ls=':', c=SUBBAND_COLOR[s + 1])
+
+        ax[b].set_xlabel('Iteration',fontsize = 25)
+    #     ax[b].set_ylabel('NMSE (dB)')
+        ax[b].set_title('Scale {}'.format(3- b + 1),fontsize = 25)
+
+    handles, labels = ax[0].get_legend_handles_labels()
+
+    fig.legend(fontsize = 25, loc='lower center', bbox_to_anchor=(0.5, -0.25), ncol=4, fancybox=True)
+
+    fig.suptitle('Evolution of predicted subband SDs and empirically estimated subband SDs for several subbands over 20 iterations', fontsize=35)
+
+
+    ax[0].xaxis.set_tick_params(labelsize=22)
+    ax[0].yaxis.set_tick_params(labelsize=22)
+
+    ax[1].xaxis.set_tick_params(labelsize=22)
+    ax[1].yaxis.set_tick_params(labelsize=22)
+    ax[2].xaxis.set_tick_params(labelsize=22)
+    ax[2].yaxis.set_tick_params(labelsize=22)
+    ax[3].xaxis.set_tick_params(labelsize=22)
+    ax[3].yaxis.set_tick_params(labelsize=22)
+
+    ax[0].set_xlim((0,20))
+    ax[1].set_xlim((0,20))
+    ax[2].set_xlim((0,20))
+    ax[3].set_xlim((0,20))
+
+    fig.tight_layout()
