@@ -963,7 +963,7 @@ def get_gamma_2_plot(GAMMA_2_full_true_mat,GAMMA_2_full_mat):
     level = 4
     
     fig, ax = plt.subplots(1, level, figsize=(25, 6), dpi=120 )
-    iteration_count = np.arange(GAMMA_2_full_true_mat.shape[0]) 
+    iteration_count = np.arange(GAMMA_2_full_true_mat.shape[0]) + 1
     tau_full = (1/torch.sqrt(GAMMA_2_full_true_mat)).cpu()
     err_full = (1/torch.sqrt(GAMMA_2_full_mat)).cpu()
 
@@ -1023,9 +1023,9 @@ def get_gamma_2_plot(GAMMA_2_full_true_mat,GAMMA_2_full_mat):
     ax[3].xaxis.set_tick_params(labelsize=22)
     ax[3].yaxis.set_tick_params(labelsize=22)
 
-    ax[0].set_xlim((0,20))
-    ax[1].set_xlim((0,20))
-    ax[2].set_xlim((0,20))
-    ax[3].set_xlim((0,20))
+    ax[0].set_xlim((1,20))
+    ax[1].set_xlim((1,20))
+    ax[2].set_xlim((1,20))
+    ax[3].set_xlim((1,20))
 
     fig.tight_layout()
