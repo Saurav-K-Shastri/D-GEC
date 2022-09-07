@@ -11,7 +11,7 @@ To solve inverse problems, plug-and-play (PnP) methods replace the proximal step
 ### Demo
 The Jupyter Notebook "Fast_DGEC_vs_PnP_Demo_Notebook.ipynb" contains demo of the multicoil fastMRI image reconstruction using the D-GEC algorithm. This demo compares the performance of D-GEC and PnP-PDS. 
 
-The Jupyter Notebook "Example_DGEC_behavior.ipynb" contains an example of D-GEC behavior in multicoil MRI with a 2D line mask.
+The Jupyter Notebook "Example_DGEC_behavior_Notebook.ipynb" contains an example of D-GEC behavior in multicoil MRI with a 2D line mask.
 
 ### Dependencies
 

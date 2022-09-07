@@ -706,12 +706,6 @@ def run_fast_DGEC_and_PnP(dataset,R,sampling_pattern,image_number,model_dir,data
 
 def get_DGEC_behavior(image_number,model_dir,data_dir,device):
     
-    ##################################################################
-    """
-    Important Note: To obtain good QQ plots and SD evolution plots for all options (dataset,R,sampling_pattern), appropriate tweaking of number of CG iterations, EM iterations, and few other parameters will be required. We have optimized for knee data, line sampling, and R = 4
-    """
-    ##################################################################
-
     print("Image Number : ", image_number)
     print(" ")
     
