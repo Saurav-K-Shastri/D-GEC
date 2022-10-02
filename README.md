@@ -31,3 +31,8 @@ conda env create -f environment.yml
 ### corr+corr denoiser
 
 For DnCNN corr+corr denoiser training code, please refer: https://github.com/Saurav-K-Shastri/corr-plus-corr 
+
+### Acknowledgments
+- [D-VDAMP](https://github.com/Intelligent-Sensing/D-VDAMP)
+- [bias free denoising](https://github.com/LabForComputationalVision/bias_free_denoising)
+- [fastMRI](https://github.com/facebookresearch/fastMRI)
